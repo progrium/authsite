@@ -48,10 +48,10 @@ func (s *State) IntervalDuration() time.Duration {
 }
 
 var credentials = &Credentials{
-	Audience:           "https://dev-1nsti7ihypsu5i6k.us.auth0.com/api/v2/",
-	ClientID:           "cE2Rx6iKKmBHCLHRj81zcBgZ0N6M5lQ1",
-	DeviceCodeEndpoint: "https://dev-1nsti7ihypsu5i6k.us.auth0.com/oauth/device/code",
-	OauthTokenEndpoint: "https://dev-1nsti7ihypsu5i6k.us.auth0.com/oauth/token",
+	Audience:           "https://*.auth0.com/api/v2/",
+	ClientID:           "2iZo3Uczt5LFHacKdM0zzgUO2eG2uDjT",
+	DeviceCodeEndpoint: "https://auth0.auth0.com/oauth/device/code",
+	OauthTokenEndpoint: "https://auth0.auth0.com/oauth/token",
 }
 
 // WaitUntilUserLogsIn waits until the user is logged in on the browser.
@@ -120,7 +120,7 @@ var RequiredScopes = []string{
 	"openid",
 	"offline_access", // For retrieving refresh token.
 	"create:clients", "delete:clients", "read:clients", "update:clients",
-	"read:client_grants",
+	"read:client_grants", "update:client_grants", "create:client_grants",
 	"create:resource_servers", "delete:resource_servers", "read:resource_servers", "update:resource_servers",
 	"create:roles", "delete:roles", "read:roles", "update:roles",
 	"create:rules", "delete:rules", "read:rules", "update:rules",
@@ -128,7 +128,7 @@ var RequiredScopes = []string{
 	"read:branding", "update:branding",
 	"read:email_templates", "update:email_templates",
 	"read:email_provider",
-	"read:connections", "update:connections",
+	"read:connections", "update:connections", "create:connections", "delete:connections",
 	"read:client_keys", "read:logs", "read:tenant_settings",
 	"read:custom_domains", "create:custom_domains", "update:custom_domains", "delete:custom_domains",
 	"read:anomaly_blocks", "delete:anomaly_blocks",
