@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -15,6 +16,10 @@ import (
 
 	"github.com/auth0/go-auth0"
 	"github.com/auth0/go-auth0/management"
+	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/huh/spinner"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/cli/oauth/api"
 	"github.com/cli/oauth/device"
 	"github.com/google/go-github/v58/github"
 	"github.com/progrium/authsite/auth"
@@ -39,24 +44,98 @@ func contains(slice []string, str string) bool {
 	return false
 }
 
+var (
+	domain            string
+	oauthClientID     string
+	oauthClientSecret string
+)
+
+func fatal(err error) {
+	if err != nil {
+		text := lipgloss.NewStyle().Foreground(lipgloss.Color("#ff0000")).SetString(err.Error())
+		fmt.Println(text)
+		os.Exit(1)
+	}
+}
+
 func main() {
-	flag.Parse()
-	args := flag.Args()
-	// todo: check num args
 
 	ctx := context.Background()
-	domain := args[0]
-	ghOAuthClientID := ""
-	ghOAuthClientSecret := ""
+	theme := huh.ThemeBase16()
 
-	ips, err := net.LookupIP(domain)
-	if err != nil {
-		log.Fatal("domain is not resolving to any IP")
+	//accessibleMode := os.Getenv("ACCESSIBLE") != ""
+	//form.WithAccessible(accessibleMode)
+
+	flag.Parse()
+	if len(flag.Args()) == 0 {
+		// ask for domain
+		fatal(huh.NewInput().
+			Title("Enter the domain to use for your auth capable GitHub Pages site:").
+			Value(&domain).
+			Validate(func(s string) error {
+				if s == "" {
+					return fmt.Errorf("Domain can't be empty")
+				}
+				return nil
+			}).
+			WithTheme(theme).
+			Run())
+	} else {
+		domain = flag.Arg(0)
 	}
-	for _, ip := range ips {
-		if !contains(pagesIPs, ip.String()) {
-			log.Fatal("domain has IP not pointing to GitHub Pages")
+
+	fmt.Println(theme.Focused.Title.SetString(fmt.Sprintf("Using domain '%s' for site.", domain)))
+
+	var domainErr error
+	fatal(spinner.New().
+		Title(fmt.Sprintf("Checking DNS for domain '%s' ...", domain)).
+		Action(func() {
+			ips, err := net.LookupIP(domain)
+			if err != nil {
+				var dnsErr *net.DNSError
+				if errors.As(err, &dnsErr) {
+					domainErr = fmt.Errorf("Domain '%s' is not resolving to any IP.", domain)
+					return
+				} else {
+					fatal(err)
+				}
+			}
+
+			for _, ip := range ips {
+				if !contains(pagesIPs, ip.String()) {
+					domainErr = fmt.Errorf("Domain '%s' IPs not pointing to GitHub Pages.", domain)
+					return
+				}
+			}
+		}).
+		Run())
+
+	if domainErr != nil {
+		text := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffff00")).SetString(domainErr.Error())
+		fmt.Println(text)
+
+		fmt.Println()
+		fmt.Println("Make sure to configure A records to the GitHub Pages IPs:")
+		for _, ip := range pagesIPs {
+			fmt.Println(" -", ip)
 		}
+		os.Exit(1)
+	}
+	fmt.Println(theme.Focused.Title.SetString(fmt.Sprintf("\rDomain '%s' is properly pointing to GitHub Pages.", domain)))
+
+	var hasAuth0 bool
+	huh.NewConfirm().
+		Title("Do you have an Auth0 account?").
+		Value(&hasAuth0).
+		Run()
+
+	if !hasAuth0 {
+		fmt.Println()
+		fmt.Println("TODO: get auth0 free click this URL:")
+		fmt.Println("https://auth0.com/signup")
+		fmt.Println()
+		fmt.Println("TODO: how to setup tenant")
+		os.Exit(1)
 	}
 
 	state, err := auth.GetDeviceCode(ctx, http.DefaultClient, nil)
@@ -64,11 +143,121 @@ func main() {
 		log.Fatal("failed to get the device code:", err)
 	}
 
-	fmt.Println(state.VerificationURI)
+	fmt.Printf("Login to your Auth0 account with this URL ... \n\n%s\n\n", state.VerificationURI)
 
-	tenantAuth, err2 := auth.WaitUntilUserLogsIn(ctx, http.DefaultClient, state)
-	if err2 != nil {
-		log.Fatal("failed to get the device code:", err)
+	var tenantAuth auth.Result
+	fatal(spinner.New().
+		Title("").
+		Action(func() {
+			tenantAuth, err = auth.WaitUntilUserLogsIn(ctx, http.DefaultClient, state)
+			if err != nil {
+				log.Fatal("failed to get the device code:", err)
+			}
+		}).
+		Run())
+
+	fmt.Print("\033[A\033[K")
+	fmt.Print("\033[A\033[K")
+	fmt.Print("\033[A\033[K")
+	fmt.Print("\033[A\033[K")
+
+	fmt.Println(theme.Focused.Title.SetString(fmt.Sprintf("\rLogged into Auth0 with tenant '%s'.", tenantAuth.Tenant)))
+
+	var hasGithub bool
+	huh.NewConfirm().
+		Title("Do you have a GitHub account?").
+		Value(&hasGithub).
+		Run()
+
+	if !hasGithub {
+		fmt.Println()
+		fmt.Println("TODO: get github free click this URL:")
+		fmt.Println("https://github.com/signup")
+		fmt.Println()
+		os.Exit(1)
+	}
+
+	clientID := "b5faa9cd34a4fa21d844"
+	ghCode, err := device.RequestCode(http.DefaultClient, "https://github.com/login/device/code", clientID, []string{"repo"})
+	if err != nil {
+		log.Fatal("req code:", err)
+	}
+
+	fmt.Printf("Login to your GitHub account with this URL and enter code %s ... \n\n%s\n\n", ghCode.UserCode, ghCode.VerificationURI)
+
+	var ghAuth *api.AccessToken
+	var gh *github.Client
+	var user *github.User
+	fatal(spinner.New().
+		Title("").
+		Action(func() {
+			ghAuth, err = device.Wait(ctx, http.DefaultClient, "https://github.com/login/oauth/access_token", device.WaitOptions{
+				ClientID:   clientID,
+				DeviceCode: ghCode,
+			})
+			if err != nil {
+				log.Fatal("device wait:", err)
+			}
+
+			gh = github.NewClient(nil).WithAuthToken(ghAuth.Token)
+			user, _, err = gh.Users.Get(ctx, "")
+			if err != nil {
+				log.Fatal("user get:", err)
+			}
+		}).
+		Run())
+
+	fmt.Print("\033[A\033[K")
+	fmt.Print("\033[A\033[K")
+	fmt.Print("\033[A\033[K")
+	fmt.Print("\033[A\033[K")
+
+	fmt.Println(theme.Focused.Title.SetString(fmt.Sprintf("\rLogged into GitHub as '%s'.", user.GetLogin())))
+
+	var hasOAuth bool
+	huh.NewConfirm().
+		Title(fmt.Sprintf("Have you created an OAuth App on GitHub for authenticating on %s?", domain)).
+		Value(&hasOAuth).
+		Run()
+
+	if !hasOAuth {
+		fmt.Println()
+		fmt.Println("TODO: setup an oauth app:")
+		fmt.Println("https://github.com/settings/applications/new")
+		fmt.Println()
+		fmt.Println("TODO: recommended fields...")
+		fmt.Printf(" - Application name: %s\n", domain)
+		fmt.Printf(" - Homepage URL: https://%s\n", domain)
+		fmt.Printf(" - Authorization callback URL: https://%s/login/callback\n", tenantAuth.Domain)
+		fmt.Println()
+
+		huh.NewNote().
+			Description("Press any key to continue").
+			Run()
+	}
+
+	huh.NewInput().
+		Title("Enter the OAuth application Client ID:").
+		Value(&oauthClientID).
+		Run()
+
+	// todo: tell them to make one
+	huh.NewInput().
+		Title("Enter the OAuth application Client Secret:").
+		Password(true).
+		Value(&oauthClientSecret).
+		Run()
+
+	var confirmAuth0 bool
+	fatal(huh.NewConfirm().
+		Title(fmt.Sprintf("WARNING: The following will reset and configure the Auth0 tenant '%s'. Are you sure you want to continue?", tenantAuth.Tenant)).
+		Affirmative("Yes").
+		Negative("No").
+		Value(&confirmAuth0).
+		Run())
+
+	if !confirmAuth0 {
+		os.Exit(0)
 	}
 
 	api, err := management.New(
@@ -173,8 +362,8 @@ func main() {
 			"repo":             true,
 			"email":            false,
 			"scope":            []string{"repo"},
-			"client_id":        ghOAuthClientID,
-			"client_secret":    ghOAuthClientSecret,
+			"client_id":        oauthClientID,
+			"client_secret":    oauthClientSecret,
 		},
 	})
 	if err != nil {
@@ -317,49 +506,32 @@ func main() {
 		log.Fatal("create grant:", err)
 	}
 
-	fmt.Println("DONE!")
+	fmt.Println(theme.Focused.Title.SetString(fmt.Sprintf("\rAuth0 tenant '%s' has been properly configured.", tenantAuth.Tenant)))
 
-	// github stuff
-
-	clientID := "b5faa9cd34a4fa21d844"
-	scopes := []string{"repo"}
-	httpClient := http.DefaultClient
-
-	ghCode, err := device.RequestCode(httpClient, "https://github.com/login/device/code", clientID, scopes)
-	if err != nil {
-		log.Fatal("req code:", err)
-	}
-
-	fmt.Printf("Copy code: %s\n", ghCode.UserCode)
-	fmt.Printf("then open: %s\n", ghCode.VerificationURI)
-
-	accessToken, err := device.Wait(ctx, httpClient, "https://github.com/login/oauth/access_token", device.WaitOptions{
-		ClientID:   clientID,
-		DeviceCode: ghCode,
-	})
-	if err != nil {
-		log.Fatal("device wait:", err)
-	}
-
-	gh := github.NewClient(nil).WithAuthToken(accessToken.Token)
-	user, _, err := gh.Users.Get(ctx, "")
-	if err != nil {
-		log.Fatal("user get:", err)
-	}
-
+	repoName := domain
 	username := user.GetLogin()
-	branch := "main" // TODO: parameterize
+	branch := "main"
 	path := "/"
 
+	fatal(huh.NewInput().
+		Title("A GitHub repository will be created for this site using this name:").
+		Value(&repoName).
+		Run())
+
+	fatal(huh.NewInput().
+		Title("GitHub Pages will be configured to use this branch:").
+		Value(&branch).
+		Run())
+
 	log.Println("checking for repository...")
-	_, resp, err := gh.Repositories.Get(ctx, username, domain)
+	_, resp, err := gh.Repositories.Get(ctx, username, repoName)
 	if err != nil && resp.StatusCode != 404 {
 		log.Fatal("get repo:", err)
 	}
 	if resp.StatusCode == 404 {
 		log.Println("creating repository...")
 		_, _, err = gh.Repositories.Create(ctx, "", &github.Repository{
-			Name: github.String(domain),
+			Name: github.String(repoName),
 		})
 		if err != nil {
 			log.Fatal("create repo:", err)
@@ -369,7 +541,7 @@ func main() {
 	log.Println("committing placeholder index and auth module...")
 	for _, path := range []string{"auth/api.js", "auth/auth0-9.23.3.min.js", "auth/auth0-spa-2.0.min.js", "auth/index.html", "index.html"} {
 		var sha *string
-		f, _, _, err := gh.Repositories.GetContents(ctx, username, domain, path, nil)
+		f, _, _, err := gh.Repositories.GetContents(ctx, username, repoName, path, nil)
 		if f != nil {
 			sha = f.SHA
 		}
@@ -383,7 +555,7 @@ func main() {
 		if path == "auth/index.html" {
 			data = []byte(fmt.Sprintf(string(data), tenantAuth.Domain, domainClient.GetClientID()))
 		}
-		_, _, err = gh.Repositories.UpdateFile(ctx, username, domain, path, &github.RepositoryContentFileOptions{
+		_, _, err = gh.Repositories.UpdateFile(ctx, username, repoName, path, &github.RepositoryContentFileOptions{
 			Message: github.String("authsite commit"),
 			Branch:  github.String(branch),
 			Content: data,
@@ -395,13 +567,13 @@ func main() {
 	}
 
 	log.Println("checking pages...")
-	_, resp, err = gh.Repositories.GetPagesInfo(ctx, username, domain)
+	_, resp, err = gh.Repositories.GetPagesInfo(ctx, username, repoName)
 	if err != nil && resp.StatusCode != 404 {
 		log.Fatal(err)
 	}
 	if resp.StatusCode == 404 {
 		log.Println("creating pages...")
-		_, _, err := gh.Repositories.EnablePages(ctx, username, domain, &github.Pages{
+		_, _, err := gh.Repositories.EnablePages(ctx, username, repoName, &github.Pages{
 			Source: &github.PagesSource{
 				Branch: github.String(branch),
 				Path:   github.String(path),
@@ -413,7 +585,7 @@ func main() {
 	}
 
 	log.Println("setting cname...")
-	_, err = gh.Repositories.UpdatePages(ctx, username, domain, &github.PagesUpdate{
+	_, err = gh.Repositories.UpdatePages(ctx, username, repoName, &github.PagesUpdate{
 		CNAME: github.String(domain),
 		Source: &github.PagesSource{
 			Branch: github.String(branch),
@@ -425,8 +597,9 @@ func main() {
 	}
 	approved := false
 	for !approved {
+		// TODO: use spinner
 		log.Println("checking cert status...")
-		pages, _, err := gh.Repositories.GetPagesInfo(ctx, username, domain)
+		pages, _, err := gh.Repositories.GetPagesInfo(ctx, username, repoName)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -436,7 +609,7 @@ func main() {
 		<-time.After(2 * time.Second)
 	}
 	log.Println("setting enforce https...")
-	_, err = gh.Repositories.UpdatePages(ctx, username, domain, &github.PagesUpdate{
+	_, err = gh.Repositories.UpdatePages(ctx, username, repoName, &github.PagesUpdate{
 		HTTPSEnforced: github.Bool(true),
 		CNAME:         github.String(domain),
 		Source: &github.PagesSource{
@@ -448,16 +621,27 @@ func main() {
 		log.Fatal(err)
 	}
 
-	built := false
-	for !built {
-		log.Println("checking build status...")
-		pages, _, err := gh.Repositories.GetPagesInfo(ctx, username, domain)
-		if err != nil {
-			log.Fatal(err)
-		}
-		if (*pages.Status) == "built" {
-			built = true
-		}
-		<-time.After(2 * time.Second)
-	}
+	fatal(spinner.New().
+		Title("Waiting for site to be deployed...").
+		Action(func() {
+			for {
+				// log.Println("checking build status...")
+				pages, _, err := gh.Repositories.GetPagesInfo(ctx, username, repoName)
+				if err != nil {
+					log.Fatal(err)
+				}
+				if (*pages.Status) == "built" {
+					return
+				}
+				<-time.After(2 * time.Second)
+			}
+		}).
+		Run())
+
+	fmt.Printf("Site deployed: https://%s\n", domain)
+	fmt.Println()
+	fmt.Printf("GitHub repository: https://github.com/%s/%s\n", username, repoName)
+	fmt.Printf("Auth0 dashboard: https://manage.auth0.com/dashboard/us/%s/\n", tenantAuth.Tenant) // TODO: fix region
+	fmt.Println()
+
 }
