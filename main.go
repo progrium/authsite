@@ -98,8 +98,10 @@ func main() {
 		fmt.Println()
 		fmt.Println("Make sure to configure A records to the GitHub Pages IPs:")
 		for _, ip := range pagesIPs {
-			fmt.Println(" -", ip)
+			fmt.Println(" -", bright(ip))
 		}
+		fmt.Println()
+		fmt.Println("It may take a few minutes for DNS changes to propagate.")
 		os.Exit(1)
 	}
 
@@ -565,12 +567,12 @@ func main() {
 	path := "/"
 
 	fatal(huh.NewInput().
-		Title("A GitHub repository will be created for this site using this name:").
+		Title("Enter a repository name to be used for the site:").
 		Value(&repoName).
 		Run())
 
 	fatal(huh.NewInput().
-		Title("GitHub Pages will be configured to use this branch:").
+		Title("Enter a branch name for GitHub Pages to use:").
 		Value(&branch).
 		Run())
 
@@ -765,6 +767,7 @@ func main() {
 		{"Site deployed:", bright(fmt.Sprintf("https://%s", domain))},
 	})
 	fmt.Println()
+	fmt.Println("🎉 Congrats! Your site is set up and live!")
 
 	// b, err := json.MarshalIndent(map[string]any{
 	// 	"domain": domain,
