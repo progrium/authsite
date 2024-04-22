@@ -10,7 +10,7 @@ Clone and `go build` or just `go install github.com/progrium/authsite` in a Go w
 The tool is an interactive CLI tool with a single optional argument for your domain.
 
 ```
-$ authsite yourdomain.com
+$ ./authsite yourdomain.com
 ```
 
 It walks you through the process for any manual steps. Let us know if you have ideas for improvements.
