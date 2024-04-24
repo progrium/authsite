@@ -205,27 +205,28 @@ func main() {
 
 	statusf("Logged into GitHub as '%s'.", user.GetLogin())
 
-	var hasOAuth bool
-	huh.NewConfirm().
-		Title(fmt.Sprintf("Have you created an OAuth App on GitHub for authenticating on %s?", domain)).
-		Value(&hasOAuth).
+	fmt.Println()
+	fmt.Println("Register a GitHub OAuth application to be used for login on your site:")
+	fmt.Println(bright("https://github.com/settings/applications/new"))
+	fmt.Println()
+	printTable([][]string{
+		{"Application name:", domain},
+		{"Homepage URL:", fmt.Sprintf("https://%s", domain)},
+		{"Authorization callback URL:", fmt.Sprintf("https://%s/login/callback\n", tenantAuth.Domain)},
+	})
+
+	huh.NewNote().
+		Description("When finished, leave page open and press any key to continue").
 		Run()
 
-	if !hasOAuth {
-		fmt.Println()
-		fmt.Println("Register a GitHub OAuth application to be used for login on your site:")
-		fmt.Println(bright("https://github.com/settings/applications/new"))
-		fmt.Println()
-		printTable([][]string{
-			{"Application name:", domain},
-			{"Homepage URL:", fmt.Sprintf("https://%s", domain)},
-			{"Authorization callback URL:", fmt.Sprintf("https://%s/login/callback\n", tenantAuth.Domain)},
-		})
-
-		huh.NewNote().
-			Description("Press any key when finished").
-			Run()
-	}
+	fmt.Print("\033[A\033[K")
+	fmt.Print("\033[A\033[K")
+	fmt.Print("\033[A\033[K")
+	fmt.Print("\033[A\033[K")
+	fmt.Print("\033[A\033[K")
+	fmt.Print("\033[A\033[K")
+	fmt.Print("\033[A\033[K")
+	fmt.Print("\033[A\033[K")
 
 	huh.NewInput().
 		Title(fmt.Sprintf("Enter the OAuth application %s:", bright("Client ID"))).
@@ -603,7 +604,7 @@ func main() {
 	} else {
 		var confirmExistingRepo bool
 		fatal(huh.NewConfirm().
-			Title(fmt.Sprintf("Repository '%s/%s' already exists.\nContinue to push files to %s?", username, tenantAuth.Tenant, branch)).
+			Title(fmt.Sprintf("Repository '%s/%s' already exists.\nContinue to push files to %s?", username, repoName, branch)).
 			Affirmative("Yes").
 			Negative("No").
 			Value(&confirmExistingRepo).
