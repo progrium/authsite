@@ -387,15 +387,19 @@ func main() {
 		}).
 		Run())
 
-	fatal(spinner.New().
-		Title("Clearing post-login bindings...").
-		Action(func() {
-			err = api.Action.UpdateBindings(ctx, "post-login", []*management.ActionBinding{})
-			if err != nil {
-				log.Fatal("update binding:", err)
-			}
-		}).
-		Run())
+	retryOnError(func() error {
+		spinner.New().
+			Title("Clearing post-login bindings...").
+			Action(func() {
+				err := api.Action.UpdateBindings(ctx, "post-login", []*management.ActionBinding{})
+				if err != nil {
+					log.Printf("Error updating binding: %v", err)
+					return
+				}
+			}).
+			Run()
+		return nil
+	}, 3, 2*time.Second) // retry 3 times with 2 seconds delay
 
 	fatal(spinner.New().
 		Title("Clearing actions...").
@@ -820,4 +824,17 @@ func printTable(data [][]string) {
 	table.SetNoWhiteSpace(true)
 	table.AppendBulk(data)
 	table.Render()
+}
+
+// retryOnError retries a function that returns an error
+func retryOnError(fn func() error, retries int, delay time.Duration) {
+	var err error
+	for i := 0; i < retries; i++ {
+		if err = fn(); err == nil {
+			return
+		}
+		log.Printf("Retrying due to error: %v (attempt %d/%d)", err, i+1, retries)
+		time.Sleep(delay)
+	}
+	log.Fatalf("Failed after %d attempts: %v", retries, err)
 }
