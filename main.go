@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -636,10 +635,18 @@ func main() {
 		}
 	}
 
+	const siteDirPath = "site"
+
 	fatal(spinner.New().
 		Title("Committing placeholder index and auth module...").
 		Action(func() {
-			for _, path := range []string{"auth/api.js", "auth/auth0-9.23.3.min.js", "auth/auth0-spa-2.0.min.js", "auth/index.html", "index.html"} {
+			for _, path := range []string{
+				"auth/api.js",
+				"auth/auth0-9.23.3.min.js",
+				"auth/auth0-spa-2.0.min.js",
+				"auth/index.html",
+				"index.html",
+			} {
 				var sha *string
 				f, _, _, err := gh.Repositories.GetContents(ctx, username, repoName, path, &github.RepositoryContentGetOptions{
 					Ref: branch,
@@ -647,16 +654,23 @@ func main() {
 				if f != nil {
 					sha = f.SHA
 				}
-				data, err := fs.ReadFile(siteDir, filepath.Join("site", path))
+
+				// Print path for debugging
+				fullPath := filepath.ToSlash(filepath.Join(siteDirPath, path))
+				fmt.Println("Reading file:", fullPath)
+
+				data, err := siteDir.ReadFile(fullPath)
 				if err != nil {
-					panic(err)
+					log.Fatalf("Error reading file %s: %v", fullPath, err)
 				}
+
 				if path == "index.html" {
 					data = []byte(fmt.Sprintf(string(data), domain))
 				}
 				if path == "auth/index.html" {
 					data = []byte(fmt.Sprintf(string(data), tenantAuth.Domain, domainClient.GetClientID()))
 				}
+
 				_, _, err = gh.Repositories.UpdateFile(ctx, username, repoName, path, &github.RepositoryContentFileOptions{
 					Message: github.String("authsite commit"),
 					Branch:  github.String(branch),
