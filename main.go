@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -387,15 +386,19 @@ func main() {
 		}).
 		Run())
 
-	fatal(spinner.New().
-		Title("Clearing post-login bindings...").
-		Action(func() {
-			err = api.Action.UpdateBindings(ctx, "post-login", []*management.ActionBinding{})
-			if err != nil {
-				log.Fatal("update binding:", err)
-			}
-		}).
-		Run())
+	retryOnError(func() error {
+		spinner.New().
+			Title("Clearing post-login bindings...").
+			Action(func() {
+				err := api.Action.UpdateBindings(ctx, "post-login", []*management.ActionBinding{})
+				if err != nil {
+					log.Printf("Error updating binding: %v", err)
+					return
+				}
+			}).
+			Run()
+		return nil
+	}, 3, 2*time.Second) // retry 3 times with 2 seconds delay
 
 	fatal(spinner.New().
 		Title("Clearing actions...").
@@ -632,10 +635,18 @@ func main() {
 		}
 	}
 
+	const siteDirPath = "site"
+
 	fatal(spinner.New().
 		Title("Committing placeholder index and auth module...").
 		Action(func() {
-			for _, path := range []string{"auth/api.js", "auth/auth0-9.23.3.min.js", "auth/auth0-spa-2.0.min.js", "auth/index.html", "index.html"} {
+			for _, path := range []string{
+				"auth/api.js",
+				"auth/auth0-9.23.3.min.js",
+				"auth/auth0-spa-2.0.min.js",
+				"auth/index.html",
+				"index.html",
+			} {
 				var sha *string
 				f, _, _, err := gh.Repositories.GetContents(ctx, username, repoName, path, &github.RepositoryContentGetOptions{
 					Ref: branch,
@@ -643,16 +654,23 @@ func main() {
 				if f != nil {
 					sha = f.SHA
 				}
-				data, err := fs.ReadFile(siteDir, filepath.Join("site", path))
+
+				// Print path for debugging
+				fullPath := filepath.ToSlash(filepath.Join(siteDirPath, path))
+				fmt.Println("Reading file:", fullPath)
+
+				data, err := siteDir.ReadFile(fullPath)
 				if err != nil {
-					panic(err)
+					log.Fatalf("Error reading file %s: %v", fullPath, err)
 				}
+
 				if path == "index.html" {
 					data = []byte(fmt.Sprintf(string(data), domain))
 				}
 				if path == "auth/index.html" {
 					data = []byte(fmt.Sprintf(string(data), tenantAuth.Domain, domainClient.GetClientID()))
 				}
+
 				_, _, err = gh.Repositories.UpdateFile(ctx, username, repoName, path, &github.RepositoryContentFileOptions{
 					Message: github.String("authsite commit"),
 					Branch:  github.String(branch),
@@ -820,4 +838,17 @@ func printTable(data [][]string) {
 	table.SetNoWhiteSpace(true)
 	table.AppendBulk(data)
 	table.Render()
+}
+
+// retryOnError retries a function that returns an error
+func retryOnError(fn func() error, retries int, delay time.Duration) {
+	var err error
+	for i := 0; i < retries; i++ {
+		if err = fn(); err == nil {
+			return
+		}
+		log.Printf("Retrying due to error: %v (attempt %d/%d)", err, i+1, retries)
+		time.Sleep(delay)
+	}
+	log.Fatalf("Failed after %d attempts: %v", retries, err)
 }
